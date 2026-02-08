@@ -5,15 +5,6 @@ from pipe import Pipe, batched, islice
 __all__ = ["debug_eager"]
 
 
-("Hello world!"
- | as_list()
- | take_while(lambda x: x != " ")
- | debug_eager("Characters:")
- | map(ord)
- | debug_eager("Codepoints:")
- | as_list())
-
-
 @Pipe
 def debug_eager(iterable, label: str | None = None, max_count: int = 100):
     """
