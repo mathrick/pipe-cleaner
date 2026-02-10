@@ -2,6 +2,7 @@
 Utilities for traversing and consuming inside pipes
 """
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 from pipe import chain_with, islice, Pipe
 
@@ -10,6 +11,15 @@ __all__ = ["LookaheadError", "with_lookahead"]
 
 class LookaheadError(RuntimeError):
     """Exception signalling errors in usage of streams created by with_lookahead()"""
+
+
+@contextmanager
+def stop_iteration_handler():
+    """Silently catch StopIteration inside the managed block"""
+    try:
+        yield
+    except StopIteration:
+        pass
 
 
 class LookaheadIterable:
@@ -22,14 +32,11 @@ class LookaheadIterable:
         self.iterator = None
 
     def _iterate(self):
-        try:
+        with stop_iteration_handler():
             while True:
                 if self._peeking:
                     raise LookaheadError("Cannot iterate after a peek(). Call rewind() first")
-
                 yield self.unpeeked.pop(0) if self.unpeeked else next(self.iterable)
-        except StopIteration:
-            pass
 
     def __iter__(self):
         return self._iterate()
@@ -43,13 +50,11 @@ class LookaheadIterable:
             raise LookaheadError("peek() called multiple times without rewind()")
 
         def _peek():
-            try:
+            with stop_iteration_handler():
                 while True:
                     item = self.unpeeked.pop(0) if self.unpeeked else next(self.iterable)
                     self.peeked.append(item)
                     yield item
-            except StopIteration:
-                pass
 
         self._peeking = _peek()
         return self._peeking
@@ -98,50 +103,50 @@ def with_lookahead(iterable):
     before an outcome is printed. We want to filter the logs so that only the ones for
     failing tests are included:
 
-      logs = []
-      for i in range(8):
-          logs.append(f"Test name: test {i}")
-          logs.extend(("Log line",) * random.randint(0, 3))
-          logs.append(f"Outcome: {'FAIL' if i % 3 == 0 else 'PASS'}")
+    logs = []
+    for i in range(8):
+        logs.append(f"Test name: test {i}")
+        logs.extend(("Log line",) * random.randint(0, 3))
+        logs.append(f"Outcome: {'FAIL' if i % 3 == 0 else 'PASS'}")
 
-      @Pipe
-      def filter_by_outcome(iterable, outcome: str):
-          pattern = "Outcome:"
-          iterable = with_lookahead(iterable)
+    @Pipe
+    def filter_by_outcome(iterable, outcome: str):
+        pattern = "Outcome:"
+        iterable = with_lookahead(iterable)
 
-          while True:
-              log_lines = (iterable.peek()
-                           | take_while(lambda x: not x.startswith(pattern))
-                           | as_list())
+        while True:
+            log_lines = (iterable.peek()
+                         | take_while(lambda x: not x.startswith(pattern))
+                         | as_list())
 
-              # Rewind one line. This restores the last line consumed by take_while() so we can
-              # actually see the outcome and parse it
-              iterable.rewind(1)
+            # Rewind one line. This restores the last line consumed by take_while() so we can
+            # actually see the outcome and parse it
+            iterable.rewind(1)
 
-              parsed_outcome = (iterable.peek()
-                                | take_while(lambda x: x.startswith(pattern))
-                                | map(lambda x: x.removeprefix(pattern).strip())
-                                | take(1)
-                                | as_list())
+            parsed_outcome = (iterable.peek()
+                              | take_while(lambda x: x.startswith(pattern))
+                              | map(lambda x: x.removeprefix(pattern).strip())
+                              | take(1)
+                              | as_list())
 
 
-              if not (log_lines and parsed_outcome):
-                  break
+            if not (log_lines and parsed_outcome):
+                break
 
-              if parsed_outcome == [outcome]:
-                  # Rewind again, so we can emit the unparsed outcome line together with the rest of
-                  # the lines
-                  iterable.rewind()
-                  yield from log_lines | chain_with(iterable | take(1))
-                  continue
+            if parsed_outcome == [outcome]:
+                # Rewind again, so we can emit the unparsed outcome line together with the rest of
+                # the lines
+                iterable.rewind()
+                yield from log_lines | chain_with(iterable | take(1))
+                continue
 
-              # Not the outcome we were looking for, skip these lines completely
-              iterable.rewind(0)
+            # Not the outcome we were looking for, skip these lines completely
+            iterable.rewind(0)
 
-      failed_only = logs | filter_by_outcome("FAIL") | as_list()
+    failed_only = logs | filter_by_outcome("FAIL") | as_list()
 
-      >>> failed_only
-      ['Test name: test 0', 'Outcome: FAIL', 'Test name: test 3', 'Log line', 'Outcome: FAIL']
+    >>> failed_only
+    ['Test name: test 0', 'Outcome: FAIL', 'Test name: test 3', 'Log line', 'Outcome: FAIL']
     """
     if isinstance(iterable, LookaheadIterable):
         return iterable
